@@ -1,0 +1,51 @@
+```{stan output.var = "gene_level_hmm"}
+data {
+  int<lower=1> N;
+  int<lower=0, upper=1> y[N];
+}
+
+parameters {
+  // raw parameters for identifiable ordering
+  real<lower=0, upper=1> p_raw;
+  real<lower=0, upper=1> delta_p;
+
+  simplex[2] tr_from1;
+  simplex[2] tr_from2;
+  simplex[2] delta;
+}
+
+transformed parameters {
+  real<lower=0, upper=1> p1 = p_raw;
+  real<lower=0, upper=1> p2 = p_raw + delta_p * (1 - p_raw);
+
+  matrix[2, 2] trmat;
+  matrix[2, N] log_lik;
+
+  trmat[1, 1] = tr_from1[1];
+  trmat[1, 2] = tr_from1[2];
+  trmat[2, 1] = tr_from2[1];
+  trmat[2, 2] = tr_from2[2];
+
+  for (n in 1:N) {
+    log_lik[1, n] = bernoulli_lpmf(y[n] | p1);
+    log_lik[2, n] = bernoulli_lpmf(y[n] | p2);
+  }
+}
+
+model {
+  p_raw ~ beta(2, 8);
+  delta_p ~ beta(2, 2); // ensures p2 > p1 but not too far
+
+  tr_from1 ~ dirichlet([2, 2]);
+  tr_from2 ~ dirichlet([2, 2]);
+  delta ~ dirichlet([5, 5]);
+
+  target += hmm_marginal(log_lik, trmat, delta);
+}
+
+generated quantities {
+  matrix[2, N] st_probs = hmm_hidden_state_prob(log_lik, trmat, delta);
+  int z[N] = hmm_latent_rng(log_lik, trmat, delta);
+}
+
+```

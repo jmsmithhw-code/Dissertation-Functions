@@ -1,0 +1,91 @@
+library(tidyverse)
+library(caret)
+library(knitr)
+
+replichores <- list(
+  "Left Ecoli" = left_replichore_ecoli,
+  "Right Ecoli" = right_replichore_ecoli,
+  "Left Saureus" = left_replichore_saureus,
+  "Right Saureus" = right_replichore_saureus
+)
+
+run_knn <- function(df, seed = 123) {
+  df_knn <- df %>% select(status_numeric, start, end, insertion_density, distance_from_origin)
+  
+  preProcValues <- preProcess(df_knn %>% select(-status_numeric), method = c("center", "scale"))
+  df_scaled <- predict(preProcValues, df_knn %>% select(-status_numeric))
+  
+  df_knn_scaled <- bind_cols(status_numeric = df_knn$status_numeric, df_scaled)
+  
+  set.seed(seed)
+  trainIndex <- createDataPartition(df_knn_scaled$status_numeric, p = 0.7, list = FALSE)
+  train_data <- df_knn_scaled[trainIndex, ]
+  test_data <- df_knn_scaled[-trainIndex, ]
+  
+  ctrl <- trainControl(method = "cv", number = 5)
+  knn_fit <- train(
+    factor(status_numeric) ~ ., 
+    data = train_data,
+    method = "knn",
+    trControl = ctrl,
+    tuneLength = 10
+  )
+  
+  pred <- predict(knn_fit, newdata = test_data)
+  
+  cm <- confusionMatrix(pred, factor(test_data$status_numeric))
+  
+  TN <- cm$table[1,1]
+  FP <- cm$table[1,2]
+  FN <- cm$table[2,1]
+  TP <- cm$table[2,2]
+  
+  bal_acc <- cm$byClass["Balanced Accuracy"]
+  
+  return(tibble(
+    Best_k = knn_fit$bestTune$k,
+    TN = TN,
+    FP = FP,
+    FN = FN,
+    TP = TP,
+    Balanced_Accuracy = bal_acc
+  ))
+}
+
+results_list <- lapply(names(replichores), function(name) {
+  df <- replichores[[name]]
+  tryCatch({
+    run_knn(df) %>% mutate(Replichore = name)
+  }, error = function(e) {
+    message("Skipping ", name, " due to error: ", e$message)
+    tibble(
+      Best_k = NA,
+      TN = NA, FP = NA, FN = NA, TP = NA,
+      Balanced_Accuracy = NA,
+      Replichore = name
+    )
+  })
+})
+
+results_table <- bind_rows(results_list) %>%
+  dplyr::select(Replichore, Best_k, TN, FP, FN, TP, Balanced_Accuracy)
+
+knitr::kable(results_table, caption = "kNN Classification Results for All Replichores")
+
+```
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library(knitr)
+
+results_table <- data.frame(
+  Replichore = c("Left Ecoli", "Right Ecoli", "Left Saureus", "Right Saureus"),
+  Best_k = c(7, 9, 7, 5),
+  TN = c(534, 565, 186, 180),
+  FP = c(13, 11, 5, 3),
+  FN = c(16, 5, 2, 8),
+  TP = c(35, 16, 11, 12),
+  Balanced_Accuracy = c(0.8500379, 0.7919103, 0.8384309, 0.8787234)
+)
+
+kable(results_table, caption = "kNN Classification Results for All Replichores")

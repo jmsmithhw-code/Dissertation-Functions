@@ -1,0 +1,44 @@
+# Function to calculate mean cluster size
+calculate_mean_cluster_size <- function(sequence) {
+  rle_seq <- rle(sequence)
+  clusters <- rle_seq$lengths[rle_seq$values == 1]  # lengths of essential gene runs
+  if (length(clusters) == 0) return(0)
+  return(mean(clusters))
+}
+
+# Modified simulation function 
+simulate_mean_cluster_size <- function(data, n_sim = 10000) {
+  num_essential <- sum(data$status_numeric == 1)
+  num_non_essential <- sum(data$status_numeric == 0)
+  
+  simulated_means <- numeric(n_sim)
+  
+  for (i in 1:n_sim) {
+    simulated_vector <- sample(c(rep(1, num_essential), rep(0, num_non_essential)))
+    simulated_means[i] <- calculate_mean_cluster_size(simulated_vector)
+  }
+  
+  return(simulated_means)
+}
+
+# Run for each replichore
+observed_mean_cluster_left_ecoli <- calculate_mean_cluster_size(left_replichore_ecoli$status_numeric)
+simulated_mean_cluster_left_ecoli <- simulate_mean_cluster_size(left_replichore_ecoli)
+
+observed_mean_cluster_right_ecoli <- calculate_mean_cluster_size(right_replichore_ecoli$status_numeric)
+simulated_mean_cluster_right_ecoli <- simulate_mean_cluster_size(right_replichore_ecoli)
+
+observed_mean_cluster_left_saureus <- calculate_mean_cluster_size(left_replichore_saureus$status_numeric)
+simulated_mean_cluster_left_saureus <- simulate_mean_cluster_size(left_replichore_saureus)
+
+observed_mean_cluster_right_saureus <- calculate_mean_cluster_size(right_replichore_saureus$status_numeric)
+simulated_mean_cluster_right_saureus <- simulate_mean_cluster_size(right_replichore_saureus)
+
+# Use >= for right-tailed p-value
+p_value_cluster_left_ecoli <- (1 + sum(simulated_mean_cluster_left_ecoli >= observed_mean_cluster_left_ecoli)) / (1 + length(simulated_mean_cluster_left_ecoli))
+
+p_value_cluster_right_ecoli <- (1 + sum(simulated_mean_cluster_right_ecoli >= observed_mean_cluster_right_ecoli)) / (1 + length(simulated_mean_cluster_right_ecoli))
+
+p_value_cluster_left_saureus <- (1 + sum(simulated_mean_cluster_left_saureus >= observed_mean_cluster_left_saureus)) / (1 + length(simulated_mean_cluster_left_saureus))
+
+p_value_cluster_right_saureus <- (1 + sum(simulated_mean_cluster_right_saureus >= observed_mean_cluster_right_saureus)) / (1 + length(simulated_mean_cluster_right_saureus))

@@ -1,0 +1,125 @@
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+pretty_labels <- c(
+  "Left_Ecoli"   = "Ecoli - Left Replichore",
+  "Right_Ecoli"  = "Ecoli - Right Replichore",
+  "Left_Saureus" = "Saureus - Left Replichore",
+  "Right_Saureus"= "Saureus - Right Replichore"
+)
+fixed_regsize <- 5
+Q_values <- 10^seq(-5, 8, length.out = 100)
+
+all_threshold_data <- data.frame()
+
+for (dataset_name in names(fits)) {
+  fit <- fits[[dataset_name]]
+  dataset <- datasets[[dataset_name]]
+
+  data_tmp <- dataset %>%
+    mutate(region = ceiling(row_number() / fixed_regsize))
+
+  # Extract posterior region probabilities
+  st_probs_array <- rstan::extract(fit, pars = "st_probs")$st_probs
+  prob_ess_region <- apply(st_probs_array, c(2, 3), mean)[2, ]
+
+  region_sizes_actual <- data_tmp %>%
+    group_by(region) %>%
+    summarise(n_genes = n(), .groups = "drop") %>%
+    pull(n_genes)
+
+  gene_probs <- rep(prob_ess_region, times = region_sizes_actual)
+  truth <- data_tmp$status_numeric
+
+  TPRs <- numeric(length(Q_values))
+  FPRs <- numeric(length(Q_values))
+
+  for (i in seq_along(Q_values)) {
+    Q <- Q_values[i]
+    threshold <- Q / (1 + Q)
+    preds <- as.integer(gene_probs >= threshold)
+
+    TP <- sum(preds == 1 & truth == 1)
+    FP <- sum(preds == 1 & truth == 0)
+    FN <- sum(preds == 0 & truth == 1)
+    TN <- sum(preds == 0 & truth == 0)
+
+    TPRs[i] <- ifelse((TP + FN) > 0, TP / (TP + FN), NA)
+    FPRs[i] <- ifelse((FP + TN) > 0, FP / (FP + TN), NA)
+  }
+
+  tmp_df <- data.frame(
+    Q = Q_values,
+    TPR = TPRs,
+    FPR = FPRs,
+    Dataset = dataset_name
+  )
+  
+  all_threshold_data <- bind_rows(all_threshold_data, tmp_df)
+}
+
+library(dplyr)
+library(ggrepel)
+
+label_data <- all_threshold_data %>%
+  group_by(Dataset) %>%
+  mutate(row_id = row_number()) %>%
+  filter(row_id %in% round(seq(1, n(), length.out = 5))) %>%
+  ungroup() %>%
+  mutate(
+    logQ = round(log10(Q), 2),
+    Q_label = as.character(logQ)
+  )
+
+auc_data <- all_threshold_data %>%
+  group_by(Dataset) %>%
+  arrange(FPR) %>%  
+  summarise(
+    auc = sum(diff(FPR) * (head(TPR, -1) + tail(TPR, -1)) / 2),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    auc_label = paste0("AUC = ", round(auc, 3))
+  )
+
+label_positions <- data.frame(
+  FPR = 0.05,
+  TPR = 0.05  
+)
+
+auc_labels <- bind_cols(auc_data, label_positions)
+
+ggplot(all_threshold_data, aes(x = FPR, y = TPR)) +
+  geom_line(size = 1) +
+  geom_abline(intercept = 0, slope = 1,
+              linetype = "dotted", colour = "grey50") +
+  geom_point(data = label_data, size = 2) +
+  geom_text_repel(data = label_data,
+                  aes(label = Q_label),
+                  size = 4, nudge_y = 0.03,
+                  segment.size = 0.2) +
+  geom_text(
+    data = auc_labels,
+    aes(x = FPR, y = TPR, label = auc_label),
+    inherit.aes = FALSE,
+    hjust = -1.5,
+    vjust = 0,
+    size = 5,           
+    fontface = "bold",
+    colour = "black"
+  ) +
+  facet_wrap(~ Dataset, labeller = labeller(Dataset = pretty_labels), ncol = 2) +
+  labs(
+    x = "False Positive Rate (FPR)",
+    y = "True Positive Rate (TPR)"
+  ) +
+  coord_equal(xlim = c(0, 1), ylim = c(0, 1)) +
+  theme_minimal(base_size = 16) +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+      panel.background = element_blank(),
+    axis.line = element_line(colour = "black"),
+    axis.ticks = element_line(colour = "black"),
+    strip.text = element_text(face = "bold", size = 14)
+  )

@@ -1,0 +1,86 @@
+```{stan output.var = "hmm_basic", echo=FALSE}
+data {
+  int numregs; // number of regions
+  int numtrials[numregs]; //number of binomial trials per region (5,10,50 etc)
+  int numess[numregs]; // number of observed essential genes per region
+}
+
+// Binomial trials to count number of successes of essential genes
+
+parameters {
+  simplex[2] tr_from1; // gamma_{1,1} and gamma_{1,2} in the photo
+  // Probability of staying in the non essential region, and then also moving to essential region
+  simplex[2] tr_from2; // gamma_{2,1} and gamma_{2,2} in the photo
+  // Probability of staying in the essential region, and then also moving to non-essential region
+  simplex[2] delta; // initial state probabilities
+  //ordered p;
+  //The initial probabilities of starting in each state.
+  //real<lower=0,upper=1> p1[2];
+  real<lower=0,upper=1> p1;  // binomial probability if non ess
+  //Probability that a gene is essential in a non-essential region
+  real<lower=0,upper=1> p2; // binomial probability if ess
+  //Probability that a gene is essential in an essential region.
+}
+
+transformed parameters{
+  matrix[2, 2] trmat = rep_matrix(0, 2, 2); //create transition matrix (fill with zeroes)
+  matrix[2, numregs] logom; // matrix to store log binomial PMF for both states, for each region
+  trmat[1,1]=tr_from1[1]; //fill in the element of the transition matrix
+  trmat[1,2]=tr_from1[2]; //fill in the element of the transition matrix 
+  trmat[2,1]=tr_from2[1]; //fill in the element of the transition matrix
+  trmat[2,2]=tr_from2[2]; //fill in the element of the transition matrix
+    //Transition probability matrix, initialized with zeros
+  //for(n in 1:numregs){
+    //  logom[1,n] = binomial_logit_lpmf(numess[n] | numtrials[n], p[1]);
+    //  logom[2,n] = binomial_logit_lpmf(numess[n] | numtrials[n], p[2]);
+    for(n in 1:numregs){
+      // calculate log binomial PMF for both states, for each region
+      logom[1,n] = binomial_lpmf(numess[n] | numtrials[n], p1); 
+      logom[2,n] = binomial_lpmf(numess[n] | numtrials[n], p2);
+    }
+  }
+
+//logom[1,n]: Log probability of observing numess[n] essential genes in region n, assuming it is non-essential (p1).
+//logom[2,n]: Log probability of observing numess[n] essential genes in region n, assuming it is essential (p2).
+
+model {
+// you should show plots of the priors and change them if you want
+    // you need to justify the choice of all the 
+    // hyperparameters (ie why a dirichlet([7,1]) prior for delta)
+    // we expect p2 to be larger than p1 (expect ess regions to have more ess genes)
+  // p ~ beta(1.5,1.5)
+  p1 ~ beta(3,6); // prior on p1 
+  p2 ~ beta(5,5); // prior on p2 
+  
+//p1 ~ beta(3,6): Assumes that non-essential regions have low essential gene probability.
+//p2 ~ beta(5,5): Assumes that essential regions have a higher essential gene probability. 
+//Beta distribution is ideal for probabilities (bounded between 0 and 1).
+//These priors encourage p2 bigger than p1, meaning essential regions should have more essential genes.  
+  
+    // plot(density(rbeta(1e+07,shape1=3,shape2=5)))
+    // will plot the prior density etc
+  delta ~ dirichlet([5,5]);
+  tr_from1 ~ dirichlet([2,2]);
+  tr_from2 ~ dirichlet([2,2]);
+  target+=hmm_marginal(logom, trmat, delta); // the log PMF of the observed
+    // counts with the state marginalised out
+}
+
+//delta ~ dirichlet([5,5]): Assumes equal probability of starting in either state.
+//tr_from1 ~ dirichlet([2,2]) and tr_from2 ~ dirichlet([2,2]):
+
+//Allow flexibility in state transitions but encourage some structure.
+//The prior (2,2) is weakly informative, allowing the model to learn from data.
+
+//Dirichlet priors ensure probabilities sum to 1.
+//Encourages smooth transitions but avoids forcing the model into extreme cases (e.g., all regions being essential).
+
+generated quantities{
+    // matrix of marginal posterior probabilities of each hidden state value
+    matrix[2, numregs] st_probs=hmm_hidden_state_prob(logom, trmat, delta);
+    // sample from the joint posterior distribution of the hidden states at each iteration 
+    // so each iteration of the chain provides a vector of the sampled states 
+    // of the latent variable (ess/non-ess)
+    int est_st[numregs]=hmm_latent_rng(logom, trmat, delta); 
+  }
+```

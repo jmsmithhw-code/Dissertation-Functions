@@ -1,0 +1,163 @@
+```{stan output.var = "dfro_only", echo=FALSE}
+data {
+  int<lower=1> numregs;
+  int<lower=0> numtrials[numregs];
+  int<lower=0> numess[numregs];
+  vector<lower=1e-3, upper=1 - 1e-3>[numregs] distance_scaled;
+}
+
+parameters {
+  simplex[2] tr_from1;
+  simplex[2] tr_from2;
+  simplex[2] delta;
+
+  real<lower=0, upper=1> mu_base[2];
+  real log_phi_base[2];
+  real phi_slope[2];
+  real mu_slope[2];
+}
+
+transformed parameters {
+  matrix[2, 2] trmat;
+  matrix[2, numregs] logom;
+
+  trmat[1] = to_row_vector(tr_from1);
+  trmat[2] = to_row_vector(tr_from2);
+
+  for (n in 1:numregs) {
+    for (s in 1:2) {
+      real mu_raw = logit(mu_base[s]) + mu_slope[s] * (distance_scaled[n] - 0.5);
+      real mu = inv_logit(mu_raw);
+      real phi = exp(log_phi_base[s] + phi_slope[s] * distance_scaled[n]);
+      real alpha = mu * phi;
+      real beta = (1 - mu) * phi;
+
+      logom[s, n] = beta_binomial_lpmf(numess[n] | numtrials[n], alpha, beta);
+    }
+  }
+}
+
+model {
+  for (s in 1:2) {
+    mu_base[s] ~ beta(2, 2);
+    log_phi_base[s] ~ normal(1, 1);
+    mu_slope[s] ~ normal(0, 3);
+    phi_slope[s] ~ normal(0, 1);
+  }
+
+  delta ~ dirichlet(rep_vector(5, 2));
+  tr_from1 ~ dirichlet(rep_vector(2, 2));
+  tr_from2 ~ dirichlet(rep_vector(2, 2));
+
+  target += hmm_marginal(logom, trmat, delta);
+}
+
+generated quantities {
+  matrix[2, numregs] st_probs = hmm_hidden_state_prob(logom, trmat, delta);
+  int est_st[numregs] = hmm_latent_rng(logom, trmat, delta);
+}
+
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, results='hide'}
+library(rstan)
+library(dplyr)
+library(pROC)
+library(caret)
+library(ggplot2)
+library(gridExtra)
+
+options(mc.cores = parallel::detectCores())
+
+regsize <- 5
+origin <- 0
+
+datasets <- list(
+  "Ecoli - Left Replichore" = left_replichore_ecoli,
+  "Ecoli - Right Replichore" = right_replichore_ecoli,
+  "Saureus - Left Replichore" = left_replichore_saureus,
+  "Saureus - Right Replichore" = right_replichore_saureus
+)
+
+init_fun <- function() list(
+  mu_base = runif(2, 0.3, 0.7),
+  log_phi_base = rnorm(2, 1, 1),
+  mu_slope = rnorm(2, 0, 0.5),
+  phi_slope = rnorm(2, 0, 1),
+  tr_from1 = c(0.9, 0.1),
+  tr_from2 = c(0.1, 0.9),
+  delta = c(0.5, 0.5)
+)
+
+mcc_fn <- function(tp, tn, fp, fn) {
+  num <- (tp * tn) - (fp * fn)
+  denom <- sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
+  if (is.na(denom) || denom == 0) return(NA)
+  return(num / denom)
+}
+
+extract_metrics <- function(fit, df, region_col = "region", status_col = "status_numeric", threshold = 0.5) {
+  st_probs_samples <- rstan::extract(fit, pars = "st_probs")$st_probs
+  mean_probs <- apply(st_probs_samples, c(2, 3), mean)
+  probs <- mean_probs[2, ]  # Probability of state 2 (non-essential)
+
+  df$pred_prob <- probs[df[[region_col]]]
+  df$pred_class <- ifelse(df$pred_prob > threshold, 1, 0)
+
+  actual <- factor(df[[status_col]], levels = c(0, 1))
+  predicted <- factor(df$pred_class, levels = c(0, 1))
+  cm <- confusionMatrix(predicted, actual)$table
+  TN <- cm[1, 1]; FP <- cm[1, 2]; FN <- cm[2, 1]; TP <- cm[2, 2]
+
+  list(
+    TN = TN, FP = FP, FN = FN, TP = TP,
+    AUC = as.numeric(auc(df[[status_col]], df$pred_prob)),
+    MCC = mcc_fn(TP, TN, FP, FN),
+    Bal_Acc = mean(c(TP / (TP + FN), TN / (TN + FP))),
+    roc_obj = roc(df[[status_col]], df$pred_prob)
+  )
+}
+
+fits <- list()
+metrics_list <- list()
+
+for (name in names(datasets)) {
+  df <- datasets[[name]] %>%
+    mutate(
+      region = ceiling(row_number() / regsize),
+      distance_from_origin = abs(start - origin),
+      distance_scaled = pmin(pmax(distance_from_origin / max(distance_from_origin), 1e-3), 1 - 1e-3)
+    )
+
+  region_df <- df %>%
+    group_by(region) %>%
+    summarise(
+      count = sum(status_numeric),
+      dist = mean(distance_scaled),
+      .groups = "drop"
+    )
+
+  hmm_data <- list(
+    numregs = nrow(region_df),
+    numtrials = rep(regsize, nrow(region_df)),
+    numess = region_df$count,
+    distance_scaled = region_df$dist
+  )
+
+  fit <- sampling(
+    object = dfro_only,     # your compiled Stan model object
+    data = hmm_data,
+    chains = 4,
+    iter = 2000,
+    warmup = 1000,
+    init = init_fun,
+    control = list(adapt_delta = 0.995, max_treedepth = 15),
+    refresh = 500
+  )
+
+  fits[[name]] <- fit
+  df$region <- ceiling(seq_len(nrow(df)) / regsize)
+  metrics_list[[name]] <- extract_metrics(fit, df)
+}
+
+```

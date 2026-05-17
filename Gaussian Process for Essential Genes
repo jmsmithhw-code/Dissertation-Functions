@@ -1,0 +1,49 @@
+library(brms)
+library(dplyr)
+library(caret)
+library(pROC)
+library(knitr)
+
+replichores <- list(
+  "Left Ecoli" = left_replichore_ecoli,
+  "Right Ecoli" = right_replichore_ecoli,
+  "Left Saureus" = left_replichore_saureus,
+  "Right Saureus" = right_replichore_saureus
+)
+
+run_gp <- function(df) {
+  gp_model <- brm(
+    status_numeric ~ s(distance_from_origin, bs = "gp") + insertion_density,
+    data = df,
+    family = bernoulli(),
+    chains = 2, iter = 2000, warmup = 1000,
+    silent = TRUE, refresh = 0
+  )
+  
+  post_probs <- posterior_epred(gp_model)
+  df$pred_prob <- apply(post_probs, 2, mean)
+  df$pred_class <- ifelse(df$pred_prob > 0.5, 1, 0)
+  
+  actual <- factor(df$status_numeric, levels = c(0,1))
+  predicted <- factor(df$pred_class, levels = c(0,1))
+  cm <- confusionMatrix(predicted, actual)
+  
+  roc_obj <- roc(df$status_numeric, df$pred_prob)
+  auc_val <- as.numeric(auc(roc_obj))
+  
+  list(
+    confusion_matrix = cm$table,
+    balanced_accuracy = cm$byClass["Balanced Accuracy"],
+    AUC = auc_val,
+    roc_obj = roc_obj 
+  )
+}
+
+gp_results <- lapply(replichores, run_gp)
+
+results_table <- tibble(
+  Replichore = names(gp_results),
+  Balanced_Accuracy = sapply(gp_results, function(x) x$balanced_accuracy),
+  AUC = sapply(gp_results, function(x) x$AUC),
+  Confusion_Matrix = sapply(gp_results, function(x) paste(capture.output(x$confusion_matrix), collapse = "\n"))
+)

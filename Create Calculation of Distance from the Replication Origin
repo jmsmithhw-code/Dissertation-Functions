@@ -1,0 +1,13 @@
+origin <- 0
+
+left_replichore_ecoli <- left_replichore_ecoli %>%
+  mutate(distance_from_origin = abs(start - origin))
+
+right_replichore_ecoli <- right_replichore_ecoli %>%
+  mutate(distance_from_origin = abs(start - origin))
+
+left_replichore_saureus <- left_replichore_saureus %>%
+  mutate(distance_from_origin = abs(start - origin))
+
+right_replichore_saureus <- right_replichore_saureus %>%
+  mutate(distance_from_origin = abs(start - origin))

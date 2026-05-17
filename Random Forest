@@ -1,0 +1,86 @@
+library(tidyverse)
+library(caret)
+library(randomForest)
+library(knitr)
+
+replichores <- list(
+  "Left Ecoli" = left_replichore_ecoli,
+  "Right Ecoli" = right_replichore_ecoli,
+  "Left Saureus" = left_replichore_saureus,
+  "Right Saureus" = right_replichore_saureus
+)
+
+run_rf <- function(df, seed = 123) {
+  df_rf <- as_tibble(df) %>%
+    dplyr::select(status_numeric, start, end, insertion_density, distance_from_origin)
+  
+  preProcValues <- preProcess(
+    df_rf %>% dplyr::select(-status_numeric), 
+    method = c("center", "scale")
+  )
+  df_scaled <- predict(preProcValues, df_rf %>% dplyr::select(-status_numeric))
+  
+  df_rf_scaled <- bind_cols(status_numeric = df_rf$status_numeric, df_scaled)
+  
+  set.seed(seed)
+  trainIndex <- createDataPartition(df_rf_scaled$status_numeric, p = 0.7, list = FALSE)
+  train_data <- df_rf_scaled[trainIndex, ]
+  test_data <- df_rf_scaled[-trainIndex, ]
+  
+  ctrl <- trainControl(method = "cv", number = 5)
+  rf_fit <- train(
+    factor(status_numeric) ~ ., 
+    data = train_data,
+    method = "rf",
+    trControl = ctrl,
+    tuneLength = 5   
+  )
+  
+  pred <- predict(rf_fit, newdata = test_data)
+  
+  cm <- confusionMatrix(pred, factor(test_data$status_numeric))
+  
+  TN <- cm$table[1,1]
+  FP <- cm$table[1,2]
+  FN <- cm$table[2,1]
+  TP <- cm$table[2,2]
+  
+  bal_acc <- cm$byClass["Balanced Accuracy"]
+  
+  return(tibble(
+    Best_mtry = rf_fit$bestTune$mtry,
+    TN = TN,
+    FP = FP,
+    FN = FN,
+    TP = TP,
+    Balanced_Accuracy = bal_acc
+  ))
+}
+
+rf_results_table <- bind_rows(
+  lapply(names(replichores), function(name) {
+    df <- replichores[[name]]
+    run_rf(df) %>% mutate(Replichore = name)
+  })
+) %>%
+  dplyr::select(Replichore, Best_mtry, TN, FP, FN, TP, Balanced_Accuracy)
+
+knitr::kable(rf_results_table, caption = "Random Forest Classification Results for All Replichores")
+
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library(tibble)
+library(knitr)
+
+rf_results_table <- tibble::tibble(
+  Replichore = c("Left Ecoli", "Right Ecoli", "Left Saureus", "Right Saureus"),
+  Best_mtry = c(2, 3, 3, 4),
+  TN = c(537, 567, 187, 180),
+  FP = c(8, 7, 6, 6),
+  FN = c(13, 3, 1, 8),
+  TP = c(40, 20, 10, 9),
+  Balanced_Accuracy = c(0.9048485, 0.8677388, 0.8098404, 0.7787234)
+)
+
+knitr::kable(rf_results_table, caption = "Random Forest Classification Results for All Replichores")

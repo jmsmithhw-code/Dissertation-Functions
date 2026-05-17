@@ -1,0 +1,40 @@
+# Function to calculate max cluster size
+calculate_max_cluster_size <- function(sequence) {
+  rle_seq <- rle(sequence)
+  clusters <- rle_seq$lengths[rle_seq$values == 1]  # lengths of runs of essential genes
+  if (length(clusters) == 0) return(0)
+  return(max(clusters))
+}
+
+# Simulation function for max cluster size
+simulate_max_cluster_size <- function(data, n_sim = 10000) {
+  simulated_maxes <- numeric(n_sim)
+  
+  for (i in 1:n_sim) {
+    shuffled_status <- sample(data$status_numeric)
+    simulated_maxes[i] <- calculate_max_cluster_size(shuffled_status)
+  }
+  
+  return(simulated_maxes)
+}
+
+# Calculate observed max cluster sizes
+observed_max_cluster_left_ecoli <- calculate_max_cluster_size(left_replichore_ecoli$status_numeric)
+observed_max_cluster_right_ecoli <- calculate_max_cluster_size(right_replichore_ecoli$status_numeric)
+observed_max_cluster_left_saureus <- calculate_max_cluster_size(left_replichore_saureus$status_numeric)
+observed_max_cluster_right_saureus <- calculate_max_cluster_size(right_replichore_saureus$status_numeric)
+
+# Simulate max cluster sizes
+simulated_max_cluster_left_ecoli <- simulate_max_cluster_size(left_replichore_ecoli)
+simulated_max_cluster_right_ecoli <- simulate_max_cluster_size(right_replichore_ecoli)
+simulated_max_cluster_left_saureus <- simulate_max_cluster_size(left_replichore_saureus)
+simulated_max_cluster_right_saureus <- simulate_max_cluster_size(right_replichore_saureus)
+
+# Calculate p-values for max cluster sizes (proportion simulated >= observed)
+p_value_max_cluster_left_ecoli <- (1 + sum(simulated_max_cluster_left_ecoli >= observed_max_cluster_left_ecoli)) / (1 + length(simulated_max_cluster_left_ecoli))
+
+p_value_max_cluster_right_ecoli <- (1 + sum(simulated_max_cluster_right_ecoli >= observed_max_cluster_right_ecoli)) / (1 + length(simulated_max_cluster_right_ecoli))
+
+p_value_max_cluster_left_saureus <- (1 + sum(simulated_max_cluster_left_saureus >= observed_max_cluster_left_saureus)) / (1 + length(simulated_max_cluster_left_saureus))
+
+p_value_max_cluster_right_saureus <- (1 + sum(simulated_max_cluster_right_saureus >= observed_max_cluster_right_saureus)) / (1 + length(simulated_max_cluster_right_saureus))

@@ -1,0 +1,299 @@
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+simulate_replichore_split <- function(
+  n_genes_observed,
+  real_starts_essential,
+  real_starts_nonessential,
+  run_length_freq,
+  insertion_density_essential,
+  insertion_density_nonessential,
+  observed_proportion_essential,
+  origin = 0,
+  
+  # Toggles with defaults
+  gene_count_multiplier = 1,
+  prop_essential_adjusted = 1,
+  cluster_size_factor = 1,  # Used as upper bound in random multiplier
+  position_shift = 0,
+  
+  # Insertion density adjustment
+  insertion_density_mean_factor_essential = 1,
+  insertion_density_sd_factor_essential = 1,
+  insertion_density_mean_factor_nonessential = 1,
+  insertion_density_sd_factor_nonessential = 1,
+  
+  # Gene spatial distribution
+  distance_distribution_mode = "uniform",  # or "essential_near_origin", "nonessential_near_origin"
+  distance_spread_factor_essential = 1,
+  distance_spread_factor_nonessential = 1
+) {
+  # Adjust gene count
+  n_genes <- round(n_genes_observed * gene_count_multiplier)
+  
+  # Set essential proportion
+  if (is.null(prop_essential_adjusted)) {
+    prop_essential_adjusted <- observed_proportion_essential
+  }
+  n_essential <- round(n_genes * prop_essential_adjusted)
+  n_nonessential <- n_genes - n_essential
+  
+  # --- Generate essential runs with randomised cluster scaling ---
+  essential_runs <- c()
+  while (sum(essential_runs) < n_essential) {
+    new_run_raw <- sample(
+      run_length_freq$Run_Length,
+      size = 1,
+      prob = run_length_freq$Count / sum(run_length_freq$Count)
+    )
+    # Add randomness: scale each run length by a different factor
+    scale_factor <- runif(1, 1, cluster_size_factor)
+    new_run <- max(1, round(new_run_raw * scale_factor))
+    essential_runs <- c(essential_runs, new_run)
+  }
+  excess <- sum(essential_runs) - n_essential
+  if (excess > 0) {
+    essential_runs[length(essential_runs)] <- essential_runs[length(essential_runs)] - excess
+  }
+  
+  # --- Generate nonessential runs ---
+  simulate_nonessential_run <- function() rgeom(1, prob = 1/3) + 1
+  status_vec <- integer(0)
+  j <- 1
+  while (length(status_vec) < n_genes) {
+    if (j <= length(essential_runs)) {
+      run_len <- min(essential_runs[j], n_genes - length(status_vec))
+      status_vec <- c(status_vec, rep(1, run_len))
+      j <- j + 1
+    }
+    if (length(status_vec) >= n_genes) break
+    nonessential_len <- min(simulate_nonessential_run(), n_genes - length(status_vec))
+    status_vec <- c(status_vec, rep(0, nonessential_len))
+  }
+  status_vec <- status_vec[1:n_genes]
+  
+  # --- Sample start positions ---
+  sample_starts_from_ecdf <- function(real_starts, n) {
+    u <- runif(n)
+    quantile(real_starts, probs = u, type = 1)
+  }
+  starts_essential <- sample_starts_from_ecdf(real_starts_essential, sum(status_vec == 1))
+  starts_nonessential <- sample_starts_from_ecdf(real_starts_nonessential, sum(status_vec == 0))
+  
+  starts <- numeric(n_genes)
+  starts[status_vec == 1] <- round(sort(starts_essential))
+  starts[status_vec == 0] <- round(sort(starts_nonessential))
+  starts <- pmax(1, starts + position_shift)
+  
+  # --- Gene lengths and ends ---
+  gene_lengths <- sample(run_length_freq$Run_Length, n_genes, replace = TRUE)
+  ends <- starts + gene_lengths - 1
+  
+  # --- Rescale helper ---
+  rescale_values <- function(x, new_mean_factor, new_sd_factor) {
+    old_mean <- mean(x)
+    old_sd <- sd(x)
+    if (old_sd == 0) return(x * new_mean_factor)
+    new_mean <- old_mean * new_mean_factor
+    new_sd <- old_sd * new_sd_factor
+    scaled <- (x - old_mean) / old_sd * new_sd + new_mean
+    pmax(0, scaled)
+  }
+  
+  # --- Insertion densities ---
+  insertion_density <- numeric(n_genes)
+  
+  # Essential
+  n_ess <- sum(status_vec == 1)
+  sampled_ess <- sample(insertion_density_essential, n_ess, replace = TRUE)
+  insertion_density[status_vec == 1] <- rescale_values(
+    sampled_ess,
+    insertion_density_mean_factor_essential,
+    insertion_density_sd_factor_essential
+  )
+  
+  # Nonessential
+  n_noness <- sum(status_vec == 0)
+  sampled_noness <- sample(insertion_density_nonessential, n_noness, replace = TRUE)
+  insertion_density[status_vec == 0] <- rescale_values(
+    sampled_noness,
+    insertion_density_mean_factor_nonessential,
+    insertion_density_sd_factor_nonessential
+  )
+  
+  # --- Distance from origin ---
+  distance_from_origin <- numeric(n_genes)
+  center_and_rescale <- function(x, spread_factor) {
+    mx <- mean(x)
+    sx <- sd(x)
+    if (sx == 0) return(rep(mx, length(x)))
+    rescaled <- (x - mx) * spread_factor + mx
+    pmax(0, rescaled)
+  }
+  
+  if (distance_distribution_mode == "uniform") {
+    distance_from_origin <- abs(starts - origin)
+  } else {
+    base_essential <- abs(starts[status_vec == 1] - origin)
+    base_nonessential <- abs(starts[status_vec == 0] - origin)
+    
+    if (distance_distribution_mode == "essential_near_origin") {
+      distance_from_origin[status_vec == 1] <- center_and_rescale(base_essential, 0.5 * distance_spread_factor_essential)
+      distance_from_origin[status_vec == 0] <- center_and_rescale(base_nonessential, 1.5 * distance_spread_factor_nonessential)
+    } else if (distance_distribution_mode == "nonessential_near_origin") {
+      distance_from_origin[status_vec == 1] <- center_and_rescale(base_essential, 1.5 * distance_spread_factor_essential)
+      distance_from_origin[status_vec == 0] <- center_and_rescale(base_nonessential, 0.5 * distance_spread_factor_nonessential)
+    } else {
+      distance_from_origin <- abs(starts - origin)
+    }
+  }
+  
+  # --- Final dataset ---
+  data.frame(
+    gene = paste0("gene", seq_len(n_genes)),
+    start = starts,
+    end = ends,
+    status_numeric = status_vec,
+    insertion_density = insertion_density,
+    distance_from_origin = distance_from_origin
+  )
+}
+
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Gene lengths from real data
+real_gene_lengths <- (left_replichore_ecoli$end - left_replichore_ecoli$start) + 1
+
+# Empirical insertion densities
+insertion_density_essential_real <- left_replichore_ecoli$insertion_density[left_replichore_ecoli$status_numeric == 1]
+insertion_density_nonessential_real <- left_replichore_ecoli$insertion_density[left_replichore_ecoli$status_numeric == 0]
+
+# Run length frequency table for essential genes
+get_essential_run_lengths <- function(seq) {
+  rle_seq <- rle(seq)
+  rle_seq$lengths[rle_seq$values == 1]
+}
+
+essential_run_lengths_real <- get_essential_run_lengths(left_replichore_ecoli$status_numeric)
+run_length_freq_real <- as.data.frame(table(essential_run_lengths_real))
+colnames(run_length_freq_real) <- c("Run_Length", "Count")
+run_length_freq_real$Run_Length <- as.integer(as.character(run_length_freq_real$Run_Length))
+
+# Number of genes and genome length
+n_genes_real <- nrow(left_replichore_ecoli)
+genome_length_real <- max(left_replichore_ecoli$end)
+
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Split real starts by essential status
+real_starts_essential <- left_replichore_ecoli$start[left_replichore_ecoli$status_numeric == 1]
+real_starts_nonessential <- left_replichore_ecoli$start[left_replichore_ecoli$status_numeric == 0]
+
+observed_proportion_essential <- mean(left_replichore_ecoli$status_numeric)
+
+set.seed(123)
+simulated_datasets <- list()
+n_simulations <- 5
+
+for (i in 1:n_simulations) {
+  sim_data <- simulate_replichore_split(
+    n_genes = n_genes_real,
+    real_starts_essential = real_starts_essential,
+    real_starts_nonessential = real_starts_nonessential,
+    run_length_freq = run_length_freq_real,
+    insertion_density_essential = insertion_density_essential_real,
+    insertion_density_nonessential = insertion_density_nonessential_real,
+    observed_proportion_essential = observed_proportion_essential,
+    origin = 0
+  )
+  simulated_datasets[[i]] <- sim_data
+}
+for (i in seq_along(simulated_datasets)) {
+  assign(paste0("sim", i), simulated_datasets[[i]])
+}
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Helper function for cluster size
+calculate_mean_cluster_size <- function(sequence) {
+  rle_seq <- rle(sequence)
+  clusters <- rle_seq$lengths[rle_seq$values == 1]
+  if(length(clusters) == 0) return(0)
+  mean(clusters)
+}
+
+# Main metric function
+compute_metrics <- function(df, species_label, replichore_label, simulation_label = "Observed") {
+  status <- df$status_numeric
+  insertion_density <- df$insertion_density
+  distance <- df$distance_from_origin
+  rle_status <- rle(status)
+  essential_cluster_sizes <- rle_status$lengths[rle_status$values == 1]
+  
+  data.frame(
+    Species = species_label,
+    Replichore = replichore_label,
+    Simulation = simulation_label,
+    
+    # Counts
+    Num_Essential = sum(status == 1),
+    Num_NonEssential = sum(status == 0),
+    
+    # Clustering
+    Mean_Cluster_Size = ifelse(length(essential_cluster_sizes) > 0, mean(essential_cluster_sizes), 0),
+    Max_Cluster_Size = ifelse(length(essential_cluster_sizes) > 0, max(essential_cluster_sizes), 0),
+    
+    # Distance from origin
+    Mean_Dist_Essential = mean(distance[status == 1]),
+    Median_Dist_Essential = median(distance[status == 1]),
+    Mean_Dist_NonEssential = mean(distance[status == 0]),
+    Median_Dist_NonEssential = median(distance[status == 0]),
+    
+    # Insertion density
+    Mean_Insert_Essential = mean(insertion_density[status == 1]),
+    SD_Insert_Essential = sd(insertion_density[status == 1]),
+    Mean_Insert_NonEssential = mean(insertion_density[status == 0]),
+    SD_Insert_NonEssential = sd(insertion_density[status == 0])
+  )
+}
+
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library(dplyr)
+
+# Compute metrics for observed datasets
+
+metrics_real <- bind_rows(
+  compute_metrics(left_replichore_ecoli, "Ecoli", "Left"),
+  compute_metrics(right_replichore_ecoli, "Ecoli", "Right"),
+  compute_metrics(left_replichore_saureus, "Saureus", "Left"),
+  compute_metrics(right_replichore_saureus, "Saureus", "Right")
+) %>%
+  mutate(Simulation = "Observed")
+
+#Compute metrics for all simulated datasets
+
+# Define species and replichore for simulations
+species_sim <- "Ecoli"
+replichore_sim <- "Left"
+
+metrics_simulated <- bind_rows(
+  lapply(seq_along(simulated_datasets), function(i) {
+    df <- simulated_datasets[[i]]
+    sim_label <- paste0("Sim", i)
+    compute_metrics(df, species_sim, replichore_sim, sim_label)
+  })
+)
+
+# Combine observed and simulated metrics
+
+metrics_all <- bind_rows(metrics_real, metrics_simulated) %>%
+  arrange(Species, Replichore, Simulation)
+
+# View
+
+##cat("Combined Metrics (Observed vs Simulated):\n")
+##view(metrics_all)
+
+```

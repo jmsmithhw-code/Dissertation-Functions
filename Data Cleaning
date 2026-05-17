@@ -1,0 +1,98 @@
+library(tidyverse)
+
+load("ecoli_data.RData")
+
+insertion_density_ecoli <- ecoli %>%
+  filter(!is.na(position) & !is.na(length)) %>%
+  group_by(gene) %>%
+  summarise(
+    unique_insertions = n_distinct(position),
+    gene_length = first(length),
+    insertion_density = unique_insertions / gene_length,
+    .groups = "drop"
+  )
+
+ecoli_modified <- ecoli %>%  
+  mutate(status_numeric = ifelse(status == "essential", 1, 0)) %>%
+  select(gene, start, end, status_numeric) %>%
+  distinct(gene, .keep_all = TRUE) %>%
+  left_join(insertion_density_ecoli %>% select(gene, insertion_density), by = "gene")
+
+# Define genome length and midpoint
+ecoli_genome_length <- max(ecoli_modified$end)
+ecoli_midpoint <- ceiling(ecoli_genome_length / 2)
+
+# Split into left and right replichores
+left_replichore_ecoli <- ecoli_modified %>% filter(end > ecoli_midpoint)
+right_replichore_ecoli <- ecoli_modified %>% filter(end <= ecoli_midpoint)
+
+# Adjust coordinates for left replichore
+left_replichore_ecoli <- left_replichore_ecoli %>%
+  mutate(
+    new_start = ecoli_genome_length - end,
+    new_end = ecoli_genome_length - start
+  ) %>%
+  select(gene, start = new_start, end = new_end, status_numeric, insertion_density) %>%
+  arrange(start)
+
+# Right replichore stays the same
+right_replichore_ecoli <- right_replichore_ecoli %>%
+  select(gene, start, end, status_numeric, insertion_density) %>%
+  arrange(start)
+
+ecoli_combined <- bind_rows(left_replichore_ecoli, right_replichore_ecoli)
+
+# Clean up
+rm(ecoli, ecoli_modified, ecoli_genome_length, ecoli_midpoint, insertion_density_ecoli)
+
+library(tidyverse)
+
+load("saureus_data.Rdata")
+
+# Calculate insertion density per gene in Saureus original data
+insertion_density_saureus <- saureus %>%
+  filter(!is.na(position) & !is.na(length)) %>%
+  group_by(gene) %>%
+  summarise(
+    unique_insertions = n_distinct(position),
+    gene_length = first(length),
+    insertion_density = unique_insertions / gene_length,
+    .groups = "drop"
+  )
+
+# Prepare saureus_modified and join insertion density
+saureus_modified <- saureus %>% 
+  mutate(status_numeric = ifelse(status == "essential", 1, 0)) %>%
+  select(gene, start, end, status_numeric) %>%
+  distinct(gene, .keep_all = TRUE) %>%
+  left_join(insertion_density_saureus %>% select(gene, insertion_density), by = "gene")
+
+rm(saureus)
+
+# Define genome length and midpoint
+saureus_genome_length <- max(saureus_modified$end)
+saureus_midpoint <- ceiling(saureus_genome_length / 2)
+
+# Split into left and right replichores
+left_replichore_saureus <- saureus_modified %>% filter(end > saureus_midpoint)
+right_replichore_saureus <- saureus_modified %>% filter(end <= saureus_midpoint)
+
+# Adjust coordinates for left replichore
+left_replichore_saureus <- left_replichore_saureus %>%
+  mutate(
+    new_start = saureus_genome_length - end,
+    new_end = saureus_genome_length - start
+  ) %>%
+  select(gene, start = new_start, end = new_end, status_numeric, insertion_density) %>%
+  arrange(start)
+
+# Right replichore columns reordered
+right_replichore_saureus <- right_replichore_saureus %>%
+  select(gene, start, end, status_numeric, insertion_density) %>%
+  arrange(start)
+
+# Combine both replichores
+saureus_combined <- bind_rows(left_replichore_saureus, right_replichore_saureus)
+
+# Cleanup
+rm(saureus_modified, saureus_genome_length, saureus_midpoint, insertion_density_saureus)

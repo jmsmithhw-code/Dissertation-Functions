@@ -1,0 +1,39 @@
+library(dplyr)
+library(ggplot2)
+
+# Function to calculate median distance from origin for essential genes
+calculate_median_distance_from_origin <- function(data) {
+  median(data$start[data$status_numeric == 1], na.rm = TRUE)
+}
+
+# Simulation function to compute simulated medians
+simulate_median_distance <- function(data, n_sim = 10000) {
+  num_essential <- sum(data$status_numeric == 1)
+  
+  simulated_medians <- numeric(n_sim)
+  for (i in 1:n_sim) {
+    shuffled_status <- sample(data$status_numeric)
+    data_shuffled <- data %>%
+      mutate(shuffled_status = shuffled_status)
+    simulated_medians[i] <- median(data_shuffled$start[data_shuffled$shuffled_status == 1])
+  }
+  return(simulated_medians)
+}
+# Observed and simulated median distance
+observed_median_left_ecoli <- calculate_median_distance_from_origin(left_replichore_ecoli)
+simulated_median_left_ecoli <- simulate_median_distance(left_replichore_ecoli)
+
+observed_median_right_ecoli <- calculate_median_distance_from_origin(right_replichore_ecoli)
+simulated_median_right_ecoli <- simulate_median_distance(right_replichore_ecoli)
+
+observed_median_left_saureus <- calculate_median_distance_from_origin(left_replichore_saureus)
+simulated_median_left_saureus <- simulate_median_distance(left_replichore_saureus)
+
+observed_median_right_saureus <- calculate_median_distance_from_origin(right_replichore_saureus)
+simulated_median_right_saureus <- simulate_median_distance(right_replichore_saureus)
+
+#P-values
+p_value_median_left_ecoli <- (1 + sum(simulated_median_left_ecoli <= observed_median_left_ecoli)) / (1 + length(simulated_median_left_ecoli))
+p_value_median_right_ecoli <- (1 + sum(simulated_median_right_ecoli <= observed_median_right_ecoli)) / (1 + length(simulated_median_right_ecoli))
+p_value_median_left_saureus <- (1 + sum(simulated_median_left_saureus <= observed_median_left_saureus)) / (1 + length(simulated_median_left_saureus))
+p_value_median_right_saureus <- (1 + sum(simulated_median_right_saureus <= observed_median_right_saureus)) / (1 + length(simulated_median_right_saureus))

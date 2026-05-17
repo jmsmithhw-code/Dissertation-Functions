@@ -1,0 +1,126 @@
+```{r, echo=FALSE, eval=FALSE}
+library(dplyr)
+library(rstan)
+library(pROC)
+library(caret)
+library(ggplot2)
+library(tidyr)
+
+mcc_fn <- function(TP, TN, FP, FN) {
+  numerator <- (TP * TN) - (FP * FN)
+  denominator <- sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+  if (denominator == 0) return(0)
+  return(numerator / denominator)
+}
+
+
+datasets <- list(
+  "Ecoli - Left Replichore" = left_replichore_ecoli,
+  "Ecoli - Right Replichore" = right_replichore_ecoli,
+  "Saureus - Left Replichore" = left_replichore_saureus,
+  "Saureus - Right Replichore" = right_replichore_saureus
+)
+
+
+init_fun <- function() list(
+  p_raw = sort(runif(2, 0.05, 0.95)),
+  exp_rate = runif(1, 2, 8),
+  gamma_shape = runif(1, 1, 3),
+  gamma_rate = runif(1, 1, 3),
+  tr_from1 = c(0.9, 0.1),
+  tr_from2 = c(0.1, 0.9),
+  delta = c(0.3, 0.7)
+)
+
+
+run_hmm_cv <- function(df, regsize = 5, k = 5, threshold = 0.5) {
+  
+  df <- df %>%
+    mutate(region = ceiling(row_number() / regsize))
+  
+  regions <- unique(df$region)
+  folds <- sample(rep(1:k, length.out = length(regions)))
+  
+  cv_results <- list()
+  
+  for (fold in 1:k) {
+    cat("CV fold:", fold, "\n")
+    
+    train_regions <- regions[folds != fold]
+    test_regions  <- regions[folds == fold]
+    
+    train_df <- df %>% filter(region %in% train_regions)
+    region_df <- train_df %>%
+      group_by(region) %>%
+      summarise(
+        numess = sum(status_numeric),
+        insertion_density = mean(pmin(pmax(insertion_density, 1e-5), 1 - 1e-5)),
+        .groups = "drop"
+      )
+    
+    hmm_data <- list(
+      numregs = nrow(region_df),
+      numtrials = rep(regsize, nrow(region_df)),
+      numess = region_df$numess,
+      insertion_density = region_df$insertion_density
+    )
+    
+    fit <- sampling(
+      Insdens_Only_b_b,  # your precompiled Stan model
+      data = hmm_data,
+      chains = 4,
+      iter = 4000,
+      warmup = 2000,
+      init = init_fun,
+      control = list(adapt_delta = 0.99, max_treedepth = 15)
+    )
+    
+    test_df <- df %>% filter(region %in% test_regions)
+    st_probs <- rstan::extract(fit, pars = "state_probs")$state_probs
+    mean_probs <- apply(st_probs, c(2, 3), mean)
+    probs <- mean_probs[2, ]  # probability of non-essential
+    
+    test_df <- test_df %>%
+      mutate(pred_prob = probs[region],
+             pred_class = ifelse(pred_prob > threshold, 1, 0))
+    
+    actual <- factor(test_df$status_numeric, levels = c(0,1))
+    predicted <- factor(test_df$pred_class, levels = c(0,1))
+    cm <- confusionMatrix(predicted, actual)$table
+    TN <- cm[1, 1]; FP <- cm[1, 2]; FN <- cm[2, 1]; TP <- cm[2, 2]
+    mcc <- mcc_fn(TP, TN, FP, FN)
+    auc <- as.numeric(auc(test_df$status_numeric, test_df$pred_prob))
+    bal_acc <- mean(c(TP / (TP + FN), TN / (TN + FP)))
+    
+    cv_results[[fold]] <- list(TN = TN, FP = FP, FN = FN, TP = TP, MCC = mcc, AUC = auc, Bal_Acc = bal_acc)
+  }
+  
+  return(cv_results)
+}
+
+
+cv_metrics <- run_hmm_cv(left_replichore_ecoli, regsize = 5, k = 5)
+
+
+metrics_df <- do.call(rbind, lapply(cv_metrics, as.data.frame))
+metrics_df$fold <- 1:nrow(metrics_df)
+
+metrics_df
+
+summary_metrics <- metrics_df %>%
+  summarise(
+    TN_mean = mean(TN), TN_sd = sd(TN),
+    FP_mean = mean(FP), FP_sd = sd(FP),
+    FN_mean = mean(FN), FN_sd = sd(FN),
+    TP_mean = mean(TP), TP_sd = sd(TP),
+    MCC_mean = mean(MCC), MCC_sd = sd(MCC),
+    AUC_mean = mean(AUC), AUC_sd = sd(AUC),
+    BalAcc_mean = mean(Bal_Acc), BalAcc_sd = sd(Bal_Acc)
+  )
+
+summary_metrics
+
+
+metrics_long <- metrics_df %>%
+  pivot_longer(cols = c(AUC), names_to = "metric", values_to = "value")
+```

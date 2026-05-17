@@ -1,0 +1,113 @@
+```{stan output.var = "Insdens_Only_b_b", echo=FALSE}
+data {
+  int<lower=1> numregs;               // number of regions
+  int<lower=0> numtrials[numregs];   // binomial trials per region
+  int<lower=0> numess[numregs];      // binomial successes (essential genes) per region
+  vector<lower=0, upper=1>[numregs] insertion_density;  // observed insertion density per region
+}
+
+parameters {
+  // HMM transition and initial state probabilities
+  simplex[2] tr_from1;
+  simplex[2] tr_from2;
+  simplex[2] delta;
+
+  // Binomial success probabilities per state (ordered)
+  real<lower=0, upper=1> p_raw[2];
+
+  // Population-level Beta mean and precision per state
+  vector<lower=0, upper=1>[2] mu_pop;
+  vector<lower=0>[2] phi_pop;
+
+  // Non-centered params for hierarchical beta shape params (per state and region)
+  matrix[numregs, 2] mu_raw;       // for mu (on logit scale)
+  matrix[numregs, 2] log_phi_raw;  // for phi (on log scale)
+
+  // SD for hierarchical variation per state - half-normal prior (normal(0,1) truncated at 0)
+  vector<lower=0>[2] sigma_mu;
+  vector<lower=0>[2] sigma_phi;
+}
+
+transformed parameters {
+  matrix[2, numregs] alpha;
+  matrix[2, numregs] beta;
+  matrix[2, 2] trmat;
+  matrix[2, numregs] log_lik;
+  real<lower=0, upper=1> p[2];
+
+  // Enforce ordered p
+  p[1] = fmin(p_raw[1], p_raw[2]);
+  p[2] = fmax(p_raw[1], p_raw[2]);
+
+  // HMM transition matrix
+  trmat[1,1] = tr_from1[1];
+  trmat[1,2] = tr_from1[2];
+  trmat[2,1] = tr_from2[1];
+  trmat[2,2] = tr_from2[2];
+
+  // Compute alpha and beta for Beta distribution per state and region
+  for (s in 1:2) {
+    for (n in 1:numregs) {
+      // hierarchical mean for mu on logit scale
+      real mu_n = inv_logit(logit(mu_pop[s]) + sigma_mu[s] * mu_raw[n, s]);
+      // hierarchical precision on log scale
+      real phi_n = exp(log(phi_pop[s]) + sigma_phi[s] * log_phi_raw[n, s]);
+      alpha[s, n] = mu_n * phi_n;
+      beta[s, n] = (1 - mu_n) * phi_n;
+    }
+  }
+
+  // Log likelihood for each state and region
+  for (n in 1:numregs) {
+    for (s in 1:2) {
+      log_lik[s, n] =
+        binomial_lpmf(numess[n] | numtrials[n], p[s]) +
+        beta_lpdf(insertion_density[n] | alpha[s, n], beta[s, n]);
+    }
+  }
+}
+
+model {
+  // Priors on binomial probabilities p
+  p_raw ~ beta(2, 2);  // weakly informative prior
+
+  // Priors for population-level Beta means and precision
+  mu_pop ~ beta(2, 2);
+  phi_pop ~ gamma(2, 0.1);
+
+  // Priors on hierarchical variation - half-normal prior
+  sigma_mu ~ normal(0, 1);
+  sigma_phi ~ normal(0, 1);
+
+  // Non-centered priors for hierarchical effects
+  for (n in 1:numregs) {
+    for (s in 1:2) {
+      mu_raw[n, s] ~ normal(0, 1);
+      log_phi_raw[n, s] ~ normal(0, 1);
+    }
+  }
+
+  // Priors for HMM initial and transition probabilities
+  delta ~ dirichlet(rep_vector(5.0, 2));
+  tr_from1 ~ dirichlet(rep_vector(2.0, 2));
+  tr_from2 ~ dirichlet(rep_vector(2.0, 2));
+
+  // Add HMM marginal likelihood
+  target += hmm_marginal(log_lik, trmat, delta);
+}
+
+generated quantities {
+  matrix[2, numregs] state_probs = hmm_hidden_state_prob(log_lik, trmat, delta);
+  int est_state[numregs] = hmm_latent_rng(log_lik, trmat, delta);
+
+  int numess_sim[numregs];
+  real insertion_density_sim[numregs];
+
+  for (n in 1:numregs) {
+    int s = est_state[n];
+    numess_sim[n] = binomial_rng(numtrials[n], p[s]);
+    insertion_density_sim[n] = beta_rng(alpha[s, n], beta[s, n]);
+  }
+}
+
+```

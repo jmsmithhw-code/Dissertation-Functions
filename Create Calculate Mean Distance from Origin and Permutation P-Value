@@ -1,0 +1,42 @@
+library(dplyr) 
+
+# Function to calculate mean distance of essential genes from origin
+calculate_mean_distance_from_origin <- function(data) {
+  mean(data$start[data$status_numeric == 1], na.rm = TRUE)
+}
+
+# Simulation function for a single replichore
+simulate_mean_distance <- function(data, n_sim = 10000) {
+  num_essential <- sum(data$status_numeric == 1)
+  num_non_essential <- sum(data$status_numeric == 0)
+  
+  simulated_means <- numeric(n_sim)
+  for (i in 1:n_sim) {
+    shuffled_status <- sample(data$status_numeric)
+    data_shuffled <- data %>%
+      mutate(shuffled_status = shuffled_status)
+    simulated_means[i] <- mean(data_shuffled$start[data_shuffled$shuffled_status == 1])
+  }
+  return(simulated_means)
+}
+
+# Apply to Ecoli left replichore
+observed_mean_left_ecoli <- calculate_mean_distance_from_origin(left_replichore_ecoli)
+simulated_mean_left_ecoli <- simulate_mean_distance(left_replichore_ecoli)
+
+# Apply to Ecoli right replichore
+observed_mean_right_ecoli <- calculate_mean_distance_from_origin(right_replichore_ecoli)
+simulated_mean_right_ecoli <- simulate_mean_distance(right_replichore_ecoli)
+
+# Apply to Saureus right replichore
+observed_mean_left_saureus <- calculate_mean_distance_from_origin(left_replichore_saureus)
+simulated_mean_left_saureus <- simulate_mean_distance(left_replichore_saureus)
+
+# Apply to Saureus right replichore
+observed_mean_right_saureus <- calculate_mean_distance_from_origin(right_replichore_saureus)
+simulated_mean_right_saureus <- simulate_mean_distance(right_replichore_saureus)
+
+p_value_mean_left_ecoli <- (1 + sum(simulated_mean_left_ecoli <= observed_mean_left_ecoli)) / (1 + length(simulated_mean_left_ecoli))
+p_value_mean_right_ecoli <- (1 + sum(simulated_mean_right_ecoli <= observed_mean_right_ecoli)) / (1 + length(simulated_mean_right_ecoli))
+p_value_mean_left_saureus <- (1 + sum(simulated_mean_left_saureus <= observed_mean_left_saureus)) / (1 + length(simulated_mean_left_saureus))
+p_value_mean_right_saureus <- (1 + sum(simulated_mean_right_saureus <= observed_mean_right_saureus)) / (1 + length(simulated_mean_right_saureus))
